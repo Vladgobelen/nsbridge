@@ -36,16 +36,6 @@ impl TrayState {
             "[dbus][tray] subscribed, {} items",
             self.watcher.items().len()
         );
-        for it in self.watcher.items() {
-            eprintln!(
-                "[dbg][tray] item dest='{}' path='{}' title='{}' icon_name='{}' pixmap={}",
-                it.dest,
-                it.path,
-                it.title,
-                it.icon_name,
-                it.icon_pixmap.is_some()
-            );
-        }
         Ok(())
     }
 
@@ -68,12 +58,6 @@ impl TrayState {
                             "[dbus][tray] reloaded, {} items",
                             self.watcher.items().len()
                         );
-                        for it in self.watcher.items() {
-                            eprintln!(
-                                "[dbg][tray]   reloaded item dest='{}' title='{}' icon_name='{}' pixmap={}",
-                                it.dest, it.title, it.icon_name, it.icon_pixmap.is_some()
-                            );
-                        }
                         self.icon_cache.clear();
                         true
                     }
@@ -96,13 +80,6 @@ impl TrayState {
                         .find(|i| i.dest == dest && i.path == path)
                     {
                         let key = pixmap_key(it);
-                        eprintln!(
-                            "[dbg][tray]   refreshed item title='{}' icon_name='{}' pixmap={} cache_key='{}'",
-                            it.title,
-                            it.icon_name,
-                            it.icon_pixmap.is_some(),
-                            key
-                        );
                         self.icon_cache.remove(&it.icon_name);
                         self.icon_cache.remove(&key);
                     }
@@ -110,6 +87,10 @@ impl TrayState {
                 } else {
                     false
                 }
+            }
+            Some(watcher::ReloadKind::RemoveByDest(dest)) => {
+                eprintln!("[dbus][tray] dest '{}' lost owner, removing item", dest);
+                self.watcher.remove_by_dest(&dest)
             }
         }
     }
@@ -121,10 +102,6 @@ impl TrayState {
         let mut out = Vec::with_capacity(items.len());
         for it in &items {
             let icon_path = self.resolve_icon(it);
-            eprintln!(
-                "[dbg][tray] snapshot: dest='{}' title='{}' icon_path={:?}",
-                it.dest, it.title, icon_path
-            );
             out.push(TrayOut {
                 dest: it.dest.clone(),
                 path: it.path.clone(),
@@ -141,18 +118,10 @@ impl TrayState {
         // 1. IconName (файл).
         if !it.icon_name.is_empty() {
             if let Some(cached) = self.icon_cache.get(&it.icon_name) {
-                eprintln!(
-                    "[dbg][tray]   icon_name cache hit: '{}' -> {:?}",
-                    it.icon_name, cached
-                );
                 return cached.clone();
             }
             let resolved =
                 icons::resolve_icon_name(&it.icon_name).map(|p| p.to_string_lossy().to_string());
-            eprintln!(
-                "[dbg][tray]   resolve_icon_name('{}') -> {:?}",
-                it.icon_name, resolved
-            );
             self.icon_cache
                 .insert(it.icon_name.clone(), resolved.clone());
             if resolved.is_some() {
@@ -164,29 +133,13 @@ impl TrayState {
         if let Some(pix) = &it.icon_pixmap {
             let key = pixmap_key(it);
             if let Some(cached) = self.icon_cache.get(&key) {
-                eprintln!(
-                    "[dbg][tray]   pixmap cache hit: '{}' -> {:?}",
-                    key, cached
-                );
                 return cached.clone();
             }
-            eprintln!(
-                "[dbg][tray]   save_pixmap_icon key='{}' {}x{}",
-                key, pix.width, pix.height
-            );
             let resolved = save_pixmap_icon(&key, pix);
-            eprintln!(
-                "[dbg][tray]   save_pixmap_icon('{}') -> {:?}",
-                key, resolved
-            );
             self.icon_cache.insert(key, resolved.clone());
             return resolved;
         }
 
-        eprintln!(
-            "[dbg][tray]   no icon for title='{}' (icon_name empty, no pixmap)",
-            it.title
-        );
         None
     }
 
@@ -234,7 +187,6 @@ fn argb_to_rgba(argb: &[u8]) -> Vec<u8> {
 /// Сохранить IconPixmap в кеш nsbridge (нормализованный 64×64 PNG).
 fn save_pixmap_icon(key: &str, pix: &IconPixmapData) -> Option<String> {
     if pix.width <= 0 || pix.height <= 0 {
-        eprintln!("[dbg][tray]   invalid pixmap size {}x{}", pix.width, pix.height);
         return None;
     }
     let rgba = argb_to_rgba(&pix.argb);

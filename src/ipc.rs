@@ -78,11 +78,10 @@ impl IpcServer {
                     io::ErrorKind::BrokenPipe
                     | io::ErrorKind::ConnectionReset
                     | io::ErrorKind::WriteZero => {
-                        eprintln!("[dbg][nsbridge] broadcast: client {i} dead ({e}), removing");
                         dead.push(i);
                     }
                     _ => {
-                        eprintln!("[dbg][nsbridge] broadcast: write error to client {i}: {e}, removing");
+                        eprintln!("[nsbridge] write error to client {i}: {e}");
                         dead.push(i);
                     }
                 }
@@ -125,7 +124,7 @@ impl IpcServer {
                     Ok(n) => client.buffer.extend_from_slice(&temp[..n]),
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                     Err(e) => {
-                        eprintln!("[dbg][nsbridge] read error client {i}: {e}");
+                        eprintln!("[nsbridge] read error client {i}: {e}");
                         is_eof = true;
                         break;
                     }
@@ -133,7 +132,6 @@ impl IpcServer {
             }
 
             if is_eof {
-                eprintln!("[dbg][nsbridge] client {i} EOF, removing");
                 dead.push(i);
                 continue;
             }
@@ -169,7 +167,7 @@ impl IpcServer {
     pub fn send_to(&mut self, index: usize, msg: &str) {
         if let Some(client) = self.clients.get_mut(index) {
             if let Err(e) = protocol::write_frame(&mut client.stream, msg) {
-                eprintln!("[dbg][nsbridge] send_to client {index} error: {e}, removing");
+                eprintln!("[nsbridge] send_to client {index} error: {e}, removing");
                 self.clients.remove(index);
                 eprintln!("[nsbridge] client disconnected (after send_to), total {}", self.clients.len());
             }

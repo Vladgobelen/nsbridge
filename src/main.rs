@@ -28,16 +28,6 @@ fn main() {
     }
 }
 
-fn log_windows(tag: &str, wins: &[WindowInfo]) {
-    eprintln!("[dbg][nsbridge] {}: {} windows", tag, wins.len());
-    for w in wins {
-        eprintln!(
-            "[dbg][nsbridge]   win=0x{:x} class='{}' exe='{}' icon={:?} active={} hidden={}",
-            w.id, w.class, w.exe_path, w.icon_path, w.is_active, w.is_hidden,
-        );
-    }
-}
-
 fn broadcast_all(
     server: &mut IpcServer,
     prev_windows: &[WindowInfo],
@@ -47,13 +37,6 @@ fn broadcast_all(
     let msg_groups = encode_groups(&groups);
     let tray_items = tray.snapshot();
     let msg_tray = encode_tray(&tray_items);
-    eprintln!(
-        "[dbg][nsbridge] broadcast: groups={} tray={} bytes_groups={} bytes_tray={}",
-        groups.len(),
-        tray_items.len(),
-        msg_groups.len(),
-        msg_tray.len()
-    );
     server.broadcast(&msg_groups);
     server.broadcast(&msg_tray);
 }
@@ -129,16 +112,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         // --- accept ---
         if let Some(revents) = fds[1].revents() {
             if revents.contains(PollFlags::POLLIN) {
-                let before = server.clients_count();
                 server.accept_pending();
-                let after = server.clients_count();
-                eprintln!("[dbg][nsbridge] accept: clients {before} -> {after}");
 
                 if !has_prev {
-                    eprintln!("[dbg][nsbridge] initial collect (no prior snapshot)");
                     prev_windows = x11.collect_windows();
                     has_prev = true;
-                    log_windows("initial collect", &prev_windows);
                 }
                 broadcast_all(&mut server, &prev_windows, &mut tray);
             }
@@ -192,14 +170,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // --- D-Bus: всегда дёргаем poll_messages (неблокирующий).
-        // rustbus может читать сигналы во внутренний буфер до poll,
-        // поэтому POLLIN на dbus fd не гарантирован.
+        // --- D-Bus ---
         if let Some(dbus) = dbus_conn.as_mut() {
             let msgs = dbus.poll_messages();
-            if !msgs.is_empty() {
-                eprintln!("[dbg][nsbridge] dbus: {} messages", msgs.len());
-            }
             let mut tray_changed = false;
             for msg in &msgs {
                 if tray.handle_message(dbus, msg) {
@@ -209,11 +182,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if tray_changed && server.clients_count() > 0 {
                 let tray_items = tray.snapshot();
                 let msg = encode_tray(&tray_items);
-                eprintln!(
-                    "[dbg][nsbridge] broadcast tray: items={} bytes={}",
-                    tray_items.len(),
-                    msg.len()
-                );
                 server.broadcast(&msg);
             }
         }
@@ -236,7 +204,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         if client_has_data {
             let messages = server.read_client_messages();
             for (idx, payload) in messages {
-                eprintln!("[dbg][nsbridge] client msg idx={} payload='{}'", idx, payload);
                 match serde_json::from_str::<ClientMsg>(&payload) {
                     Ok(ClientMsg::Activate { id }) => {
                         let _ = x11.activate_window(id);
@@ -248,16 +215,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         if !has_prev {
                             prev_windows = x11.collect_windows();
                             has_prev = true;
-                            log_windows("collect on request", &prev_windows);
                         }
                         send_all(&mut server, idx, &prev_windows, &mut tray);
                     }
                     Ok(ClientMsg::TrayClick { dest, path, button, x, y }) => {
                         if let Some(dbus) = dbus_conn.as_mut() {
-                            eprintln!(
-                                "[dbg][nsbridge] tray_click dest='{}' path='{}' button={} ({},{})",
-                                dest, path, button, x, y
-                            );
                             if let Err(e) = tray.activate(dbus, &dest, &path, button, x, y) {
                                 eprintln!("[dbus][tray] activate failed: {e}");
                             }

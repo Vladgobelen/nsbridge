@@ -54,6 +54,9 @@ impl Watcher {
     pub fn subscribe(&mut self, dbus: &mut DBus) -> Result<(), String> {
         dbus.add_match("type='signal',interface='org.kde.StatusNotifierWatcher'")?;
         dbus.add_match("type='signal',interface='org.kde.StatusNotifierItem'")?;
+        dbus.add_match(
+            "type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged'",
+        )?;
         self.reload_list(dbus)?;
         self.loaded = true;
         Ok(())
@@ -111,6 +114,21 @@ impl Watcher {
                     .map(|it| it.dest.clone())?;
                 Some(ReloadKind::Item(dest, path))
             }
+            ("org.freedesktop.DBus", "NameOwnerChanged") => {
+                // NameOwnerChanged(s name, s old_owner, s new_owner).
+                // Реагируем только на потерю владельца (new_owner == "").
+                // При старте приложения new_owner = ":1.xxxxx" — это не потеря,
+                // item добавит отдельный StatusNotifierItemRegistered → List.
+                let (name, new_owner) = extract_name_owner_changed(&msg.body)?;
+                if name.is_empty() || !new_owner.is_empty() {
+                    return None;
+                }
+                let exists = self.items.iter().any(|it| it.dest == name);
+                if !exists {
+                    return None;
+                }
+                Some(ReloadKind::RemoveByDest(name))
+            }
             _ => None,
         }
     }
@@ -128,6 +146,12 @@ impl Watcher {
             }
             Err(_) => false,
         }
+    }
+
+    pub fn remove_by_dest(&mut self, dest: &str) -> bool {
+        let before = self.items.len();
+        self.items.retain(|it| it.dest != dest);
+        self.items.len() != before
     }
 
     pub fn activate(
@@ -153,6 +177,8 @@ impl Watcher {
 pub enum ReloadKind {
     List,
     Item(String, String),
+    /// Приложение потеряло bus name — удалить item по dest.
+    RemoveByDest(String),
 }
 
 pub fn split_item(s: &str) -> Option<(String, String)> {
@@ -163,6 +189,30 @@ pub fn split_item(s: &str) -> Option<(String, String)> {
         return None;
     }
     Some((dest.to_string(), path.to_string()))
+}
+
+/// `NameOwnerChanged(s name, s old_owner, s new_owner)` — берём `name`
+/// (первый) и `new_owner` (третий). Второй (`old_owner`) не нужен.
+fn extract_name_owner_changed(
+    body: &rustbus::message_builder::MarshalledMessageBody,
+) -> Option<(String, String)> {
+    let mut parser = body.parser();
+    let name = param_to_string(parser.get_param().ok()?)?;
+    let _old = param_to_string(parser.get_param().ok()?)?;
+    let new = param_to_string(parser.get_param().ok()?)?;
+    Some((name, new))
+}
+
+fn param_to_string(p: Param) -> Option<String> {
+    match p {
+        Param::Base(Base::String(s))
+        | Param::Base(Base::ObjectPath(s))
+        | Param::Base(Base::Signature(s)) => Some(s),
+        Param::Base(Base::StringRef(s))
+        | Param::Base(Base::ObjectPathRef(s))
+        | Param::Base(Base::SignatureRef(s)) => Some(s.to_string()),
+        _ => None,
+    }
 }
 
 fn extract_string_array(p: Param) -> Option<Vec<String>> {
@@ -233,9 +283,6 @@ fn extract_bool(p: Param) -> Option<bool> {
     }
 }
 
-/// Развернуть `Param` (variant of `a(iiay)`) в первую иконку.
-/// Обычно `IconPixmap` содержит одну иконку (иногда несколько размеров —
-/// берём самую большую).
 fn extract_pixmap(p: Param) -> Option<IconPixmapData> {
     let inner = match p {
         Param::Container(Container::Variant(v)) => v.value,

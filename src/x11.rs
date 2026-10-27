@@ -302,7 +302,6 @@ impl X11 {
 
     /// Сфокусировать окно (`_NET_ACTIVE_WINDOW`).
     pub fn activate_window(&self, win: Window) -> Result<(), Box<dyn std::error::Error>> {
-        eprintln!("[dbg][x11] activate_window 0x{:x}", win);
         let ev = ClientMessageEvent::new(
             32,
             win,
@@ -322,7 +321,6 @@ impl X11 {
     /// Свернуть окно (`WM_CHANGE_STATE` → `IconicState`).
     /// ICCCM. Как `xdotool windowminimize`.
     pub fn minimize_window(&self, win: Window) -> Result<(), Box<dyn std::error::Error>> {
-        eprintln!("[dbg][x11] minimize_window 0x{:x} (via WM_CHANGE_STATE)", win);
         let ev = ClientMessageEvent::new(
             32,
             win,
@@ -341,7 +339,6 @@ impl X11 {
 
     /// Развернуть окно: снять `_NET_WM_STATE_HIDDEN` (REMOVE = 0) + фокус.
     pub fn unminimize_window(&self, win: Window) -> Result<(), Box<dyn std::error::Error>> {
-        eprintln!("[dbg][x11] unminimize_window 0x{:x}", win);
         let ev = ClientMessageEvent::new(
             32,
             win,
@@ -366,23 +363,15 @@ impl X11 {
         // сворачиваем. Если они как-то попали в groups (баг фильтра),
         // toggle для них — no-op, чтобы не дёргать панель KDE.
         if !self.is_normal_window(win) {
-            eprintln!("[dbg][x11] toggle 0x{:x}: not a normal window, ignoring", win);
             return Ok(());
         }
 
         let states = self.prop_atoms(win, self.atoms.net_wm_state);
         let is_active = states.contains(&self.atoms.net_wm_state_focused);
 
-        eprintln!(
-            "[dbg][x11] toggle 0x{:x}: is_active={}, states={:?}",
-            win, is_active, states
-        );
-
         if is_active {
-            eprintln!("[dbg][x11]   -> minimize");
             self.minimize_window(win)?;
         } else {
-            eprintln!("[dbg][x11]   -> activate");
             self.activate_window(win)?;
         }
         Ok(())

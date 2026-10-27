@@ -105,6 +105,18 @@ impl DBus {
     }
 
     pub fn poll_messages(&mut self) -> Vec<MarshalledMessage> {
+        // Сначала вычитываем ВЕСЬ доступный ввод-вывод из сокета D-Bus
+        // в внутреннюю очередь RpcConn. Без этого try_get_signal()
+        // всегда возвращает None, потому что сокет не прочитан.
+        match self.conn.refill_all() {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("[dbus] refill_all error: {e}");
+                return Vec::new();
+            }
+        }
+
+        // Теперь забираем все разобранные сигналы из очереди.
         let mut out = Vec::new();
         loop {
             match self.conn.try_get_signal() {
