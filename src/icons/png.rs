@@ -1,9 +1,7 @@
 //! Обертка над крейтом `png` для чтения изображений.
 //! Приводит любой PNG (RGB, RGBA, Grayscale, Palette) к сырому RGBA8 буферу.
 //!
-//! Для `Indexed` читаем `tRNS` (прозрачность палитры). Раньше альфа
-//! всегда была 255, и прозрачные иконки (в палитровом формате) получали
-//! чёрный/непрозрачный фон.
+//! Для `Indexed` читаем `tRNS` (прозрачность палитры).
 
 use std::io::BufReader;
 use std::path::Path;
@@ -22,7 +20,6 @@ pub fn decode(path: &Path) -> Option<DecodedPng> {
     let decoder = png::Decoder::new(reader);
 
     let mut reader = decoder.read_info().ok()?;
-
     let mut buf = vec![0; reader.output_buffer_size()?];
     let info = reader.next_frame(&mut buf).ok()?;
     let raw = &buf[..info.buffer_size()];

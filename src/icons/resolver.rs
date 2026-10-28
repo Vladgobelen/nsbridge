@@ -1,7 +1,16 @@
-//! Поиск иконок для приложений по `exe_path` и `class`.
+//! Поиск иконок по стандарту Freedesktop.
+//!
+//! Имя иконки берём из `.desktop` (`Icon=`), если есть. Если нет —
+//! пробуем `class` окна и basename `exe_path`. Сам файл иконки ищем
+//! через `freedesktop-icons`, который читает `index.theme`, ходит по
+//! `Inherits` и гарантированно доходит до `hicolor`.
 
 use std::path::{Path, PathBuf};
 
+use freedesktop_icons::lookup;
+
+/// Найти имя иконки (`Icon=`) в `.desktop` по `exe_path` или `class`.
+/// Пропускает `.desktop` с пустым `Icon=`.
 fn find_icon_name(exe_path: &str, class: &str) -> Option<String> {
     let search_dirs = vec![
         PathBuf::from("/usr/share/applications"),
@@ -17,15 +26,16 @@ fn find_icon_name(exe_path: &str, class: &str) -> Option<String> {
                     continue;
                 }
                 if let Some((icon, exec)) = parse_desktop(&path) {
+                    if icon.is_empty() {
+                        continue;
+                    }
                     if !exec.is_empty() && !exe_path.is_empty() {
                         if exec == exe_path || exe_path.contains(&exec) {
                             return Some(icon);
                         }
                     }
-                    if !class.is_empty() && !icon.is_empty() {
-                        if icon.to_lowercase() == class.to_lowercase() {
-                            return Some(icon);
-                        }
+                    if !class.is_empty() && icon.to_lowercase() == class.to_lowercase() {
+                        return Some(icon);
                     }
                 }
             }
@@ -56,53 +66,17 @@ fn parse_desktop(path: &Path) -> Option<(String, String)> {
     }
 }
 
+/// Найти файл иконки по имени через `freedesktop-icons`.
+/// Размер 64 — под `ICON_CACHE_SIZE`. Кэш включён: повторные вызовы
+/// для того же имени не будут заново обходить директории.
 pub fn find_icon_path(icon_name: &str) -> Option<PathBuf> {
     if icon_name.is_empty() {
         return None;
     }
-
-    if icon_name.starts_with('/') {
-        let p = PathBuf::from(icon_name);
-        if p.exists() {
-            return Some(p);
-        }
-        return None;
-    }
-
-    let bases = vec![
-        PathBuf::from("/usr/share/icons/hicolor"),
-        PathBuf::from("/usr/share/icons/Adwaita"),
-        PathBuf::from("/usr/share/pixmaps"),
-        dirs_home().join(".local/share/icons"),
-    ];
-
-    let sizes = ["32x32", "48x48", "64x64", "128x128", "256x256"];
-
-    for base in &bases {
-        for size in &sizes {
-            let p = base.join(size).join("apps").join(format!("{}.png", icon_name));
-            if p.exists() {
-                return Some(p);
-            }
-        }
-        let p = base.join(format!("{}.png", icon_name));
-        if p.exists() {
-            return Some(p);
-        }
-    }
-
-    for base in &bases {
-        let p = base.join("scalable").join("apps").join(format!("{}.svg", icon_name));
-        if p.exists() {
-            return Some(p);
-        }
-        let p = base.join("scalable").join(format!("{}.svg", icon_name));
-        if p.exists() {
-            return Some(p);
-        }
-    }
-
-    None
+    lookup(icon_name)
+        .with_size(64)
+        .with_cache()
+        .find()
 }
 
 fn dirs_home() -> PathBuf {
@@ -111,7 +85,36 @@ fn dirs_home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp"))
 }
 
+/// Главная точка входа: `exe_path` + `class` → путь к файлу иконки.
+/// Порядок кандидатов:
+/// 1. `Icon=` из `.desktop` (если найден и непустой).
+/// 2. `class` как имя иконки.
+/// 3. basename `exe_path` (без расширения).
 pub fn resolve_icon_path(exe_path: &str, class: &str) -> Option<PathBuf> {
-    let icon_name = find_icon_name(exe_path, class)?;
-    find_icon_path(&icon_name)
+    // 1. .desktop -> Icon= -> lookup.
+    if let Some(icon_name) = find_icon_name(exe_path, class) {
+        if let Some(p) = find_icon_path(&icon_name) {
+            return Some(p);
+        }
+    }
+
+    // 2. class напрямую (mpv -> mpv).
+    if !class.is_empty() {
+        if let Some(p) = find_icon_path(class) {
+            return Some(p);
+        }
+    }
+
+    // 3. basename exe (mpv для /usr/bin/mpv).
+    if !exe_path.is_empty() {
+        if let Some(base) = Path::new(exe_path).file_stem().and_then(|s| s.to_str()) {
+            if base.to_lowercase() != class.to_lowercase() {
+                if let Some(p) = find_icon_path(base) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
 }

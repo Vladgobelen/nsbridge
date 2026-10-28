@@ -9,6 +9,7 @@ mod window;
 mod x11;
 
 use std::os::fd::{AsRawFd, BorrowedFd, RawFd};
+use std::path::PathBuf;
 
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use x11rb::connection::Connection;
@@ -56,6 +57,71 @@ fn send_all(
     server.send_to(idx, &msg_tray);
 }
 
+/// Восстановить иконки для закреплённых приложений, даже если они
+/// не запущены. `pinned.json` хранит `key` (exe_path или `class:...`)
+/// и абсолютный путь к `icon.png` в кэше nsbridge. Если кэш снесён —
+/// путь битый. Здесь по `key` заново резолвим иконку через ту же
+/// логику (`icons::resolve_icon_path`), что и для живых окон, и
+/// записываем `icon.png` в тот же каталог (`store::app_dir(key)`),
+/// поэтому путь в `pinned.json` снова становится валидным.
+fn restore_pinned_icons() {
+    let home = match std::env::var_os("HOME") {
+        Some(h) => PathBuf::from(h),
+        None => return,
+    };
+    let path = home.join(".config/nspanel/widgets/window_list_rust/pinned.json");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let arr: Vec<serde_json::Value> = match serde_json::from_str(&content) {
+        Ok(a) => a,
+        Err(_) => {
+            eprintln!("[nsbridge] pinned.json parse failed, skipping restore");
+            return;
+        }
+    };
+
+    let mut restored = 0usize;
+    let mut skipped = 0usize;
+
+    for item in arr {
+        let key = match item.get("key").and_then(|v| v.as_str()) {
+            Some(k) if !k.is_empty() => k,
+            _ => continue,
+        };
+
+        // Уже есть в кэше — не трогаем.
+        if icons::store::icon_path(key).is_some() {
+            skipped += 1;
+            continue;
+        }
+
+        let (exe, class) = if let Some(c) = key.strip_prefix("class:") {
+            ("", c)
+        } else if key.starts_with("id:") {
+            // Нестабильный ключ (id окна) — восстановить нечего.
+            continue;
+        } else {
+            (key, "")
+        };
+
+        if icons::resolve_icon_path(exe, class).is_some() {
+            restored += 1;
+            eprintln!("[nsbridge] restored pinned icon: {key}");
+        } else {
+            eprintln!("[nsbridge] pinned icon not found: {key}");
+        }
+    }
+
+    if restored > 0 || skipped > 0 {
+        eprintln!(
+            "[nsbridge] pinned icons: restored {}, already cached {}",
+            restored, skipped
+        );
+    }
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[nsbridge] starting");
 
@@ -63,10 +129,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[nsbridge] connected to X11, root=0x{:x}", x11.root);
     let _ = x11.subscribe_all_windows();
 
+    // Восстанавливаем иконки закреплённых до того, как панель подключится
+    // и начнёт запрашивать пути.
+    restore_pinned_icons();
+
     let mut server = IpcServer::bind(socket_path())?;
     eprintln!("[nsbridge] listening on {}", socket_path().display());
 
-    // D-Bus: подключение + подписка трея.
     let mut dbus_conn: Option<DBus> = match DBus::session() {
         Ok(d) => Some(d),
         Err(e) => {

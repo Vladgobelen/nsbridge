@@ -1,6 +1,5 @@
 //! Билинейный ресайз RGBA → RGBA. Достаточно для иконок.
 
-/// Ресайз RGBA-буфера (src_w × src_h) до (dst_w × dst_h).
 pub fn resize(
     rgba: &[u8],
     src_w: usize,

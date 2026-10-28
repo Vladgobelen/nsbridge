@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+freedesktop-icons = "0.4.0"
 ico = "0.6.0"
 icoextract_rs = "0.1.2"
 nix = { version = "0.31.3", features = ["poll", "user"] }

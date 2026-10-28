@@ -37,15 +37,22 @@ pub fn resolve_icon_path(exe_path: &str, class: &str) -> Option<PathBuf> {
         return Some(p);
     }
 
-    let rgba_src: Option<(Vec<u8>, usize, usize)> = if exe_path.to_lowercase().ends_with(".exe") {
-        exe::extract_from_exe(Path::new(exe_path))
-            .map(|i| (i.rgba, i.width, i.height))
-    } else {
-        resolver::resolve_icon_path(exe_path, class).and_then(|path| decode_by_ext(&path))
-    };
+    // Wine/PE — извлекаем иконку из .exe (как раньше).
+    if exe_path.to_lowercase().ends_with(".exe") {
+        if let Some(i) = exe::extract_from_exe(Path::new(exe_path)) {
+            return normalize_and_save(key, &i.rgba, i.width, i.height);
+        }
+        return None;
+    }
 
-    let (rgba, w, h) = rgba_src?;
-    normalize_and_save(key, &rgba, w, h)
+    // Стандартный путь: resolver (desktop / class / exe stem) -> файл.
+    if let Some(path) = resolver::resolve_icon_path(exe_path, class) {
+        if let Some((rgba, w, h)) = decode_by_ext(&path) {
+            return normalize_and_save(key, &rgba, w, h);
+        }
+    }
+
+    None
 }
 
 pub fn resolve_icon_name(name: &str) -> Option<PathBuf> {
